@@ -4,8 +4,8 @@ import { formatDuration } from "../utils/helper.utils.js";
 import { redisClient } from "../../config/redis.config.js";
 // amadeus config
 const amadeus = new Amadeus({
-    clientId: process.env.AMADEUS_API_KEY,
-    clientSecret: process.env.AMADEUS_SECRET_KEY,
+    clientId: '7sBRb7nTWB5xxhbACBYiDrr3ZvrSTDuy',
+    clientSecret: 'zprMirmFSdPDduKT',
     logger
 });
 
