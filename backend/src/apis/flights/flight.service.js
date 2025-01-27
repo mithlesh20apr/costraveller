@@ -2,52 +2,77 @@ import Amadeus from "amadeus"
 import { logger } from "../../config/logger.config.js"
 import { formatDuration } from "../utils/helper.utils.js";
 import { redisClient } from "../../config/redis.config.js";
+import dotenv from 'dotenv';
+import axios from 'axios';
+
+dotenv.config();
+
 // amadeus config
 const amadeus = new Amadeus({
-    clientId: '7sBRb7nTWB5xxhbACBYiDrr3ZvrSTDuy',
-    clientSecret: 'zprMirmFSdPDduKT',
+    clientId: process.env.AMADEUS_API_KEY,
+    clientSecret: process.env.AMADEUS_SECRET_KEY,
     logger
 });
+
+const convertCurrency = async (amount, fromCurrency, toCurrency) => {
+    try {
+        const response = await axios.get(`https://api.exchangerate-api.com/v4/latest/${fromCurrency}`);
+        const rate = response.data.rates[toCurrency];
+        return (amount * rate).toFixed(2);
+    } catch (error) {
+        logger.error('Error converting currency:', error);
+        throw error;
+    }
+}
 
 //flight offer
 const flightOffers = async (origin, destination, departureDate, adults) => {
     //implementing catching
-    const flights = await redisClient.hGet('flight', `${origin}-${destination}-${departureDate}-${adults}`);
-    console.log(flights);
+    const flights = await redisClient.hGet('flight', `${origin}-${destination}-${departureDate}-}-${adults}`);
+   
     if (flights) {
         return JSON.parse(flights)
     } else {
-        const newFlights = await amadeus.shopping.flightOffersSearch.get({
-            originLocationCode: origin,
-            destinationLocationCode: destination,
-            departureDate,
-            adults,
-            max: '10' // this is hardcoded, you can always make it dynamic, default = 10
-        })
-        await redisClient.hSet('flight', `${origin}-${destination}-${departureDate}-${adults}`, JSON.stringify(newFlights))
-        return newFlights
+        try {
+            const newFlights = await amadeus.shopping.flightOffersSearch.get({
+                originLocationCode: origin,
+                destinationLocationCode: destination,
+                departureDate,
+                adults // this is hardcoded, you can always make it dynamic, default = 10
+            })
+            if (newFlights && newFlights.data) {
+                await redisClient.hSet('flight', `${origin}-${destination}-${departureDate}-}-${adults}`, JSON.stringify(newFlights))
+                return newFlights
+            } else {
+                logger.error('No flight data returned from Amadeus API');
+                return null;
+            }
+        } catch (error) {
+            logger.error('Error fetching flight offers:', error);
+            throw error;
+        }
     }
-
 }
-
-
 
 //search flight offers
 export const flightSearcService = async (origin, destination, departureDate, adults) => {
     const flights = await flightOffers(origin, destination, departureDate, adults);
-    return flights.data.map((flight) => {
+    return Promise.all(flights.data.map(async (flight) => {
+        const priceInRupees = await convertCurrency(flight.price.grandTotal, flight.price.currency, 'INR');
         return {
             id: flight.id,
             airline: flight.validatingAirlineCodes[0],
-            flightNumber: flight.itineraries[0].segments[0].number,
-            departure: flight.itineraries[0].segments[0].departure,
-            arrival: flight.itineraries[0].segments[0].arrival,
-            duration: formatDuration(flight.itineraries[0].duration),
+            segments: flight.itineraries[0].segments.map(segment => ({
+                flightNumber: segment.number,
+                departure: segment.departure,
+                arrival: segment.arrival,
+                duration: formatDuration(segment.duration)
+            })),
             numberOfBookableSeats: flight.numberOfBookableSeats,
-            price: flight.price.grandTotal,
-            currency: flight.price.currency
+            price: parseFloat(priceInRupees),
+            currency: 'INR'
         }
-    })
+    }));
 }
 
 export const flightComfirmationService = async (origin, destination, departureDate, adults, id) => {
